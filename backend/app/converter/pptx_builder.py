@@ -158,7 +158,8 @@ def _render_curved_vector_as_png(ve: VectorElement, scale: float = 3.0) -> bytes
 
 
 def _clip_from_pdf(
-    pdf_path: str, page_num: int, bbox, bg_color: tuple | None = None,
+    pdf_path: str, page_num: int, bbox,
+    text_bboxes: list = None,
     scale: float = 4.0, tolerance: int = 30,
 ) -> bytes | None:
     """Clip a region from the original PDF page and remove background color.
@@ -167,7 +168,9 @@ def _clip_from_pdf(
         pdf_path: Path to the PDF file.
         page_num: Page index.
         bbox: BBox object with x0, y0, x1, y1.
-        bg_color: Background RGB (0-255) to make transparent. Auto-detected if None.
+        text_bboxes: List of BBox for text spans inside this area.
+                     These regions will be masked out (painted over with bg color)
+                     so only the graphic remains in the PNG.
         scale: Render scale (higher = sharper).
         tolerance: Color distance tolerance for background removal.
     
@@ -190,18 +193,28 @@ def _clip_from_pdf(
         img_rgba = img.convert("RGBA")
         pixels = img_rgba.load()
         
-        # Auto-detect background color from corners if not provided
-        if bg_color is None:
-            corners = [
-                pixels[0, 0][:3],
-                pixels[pix.width - 1, 0][:3],
-                pixels[0, pix.height - 1][:3],
-                pixels[pix.width - 1, pix.height - 1][:3],
-            ]
-            # Use most common corner color as background
-            bg_color = max(set(corners), key=corners.count)
+        # Auto-detect background color from corners
+        corners = [
+            pixels[0, 0][:3],
+            pixels[pix.width - 1, 0][:3],
+            pixels[0, pix.height - 1][:3],
+            pixels[pix.width - 1, pix.height - 1][:3],
+        ]
+        bg = max(set(corners), key=corners.count)
+        bg_r, bg_g, bg_b = bg[0], bg[1], bg[2]
         
-        bg_r, bg_g, bg_b = bg_color[0], bg_color[1], bg_color[2]
+        # Mask out text regions: paint them with background color
+        # so they become transparent after bg removal.
+        # Text is handled separately as editable text boxes.
+        if text_bboxes:
+            for tb in text_bboxes:
+                px0 = max(0, int((tb.x0 - bbox.x0 + 1) * scale) - 2)
+                py0 = max(0, int((tb.y0 - bbox.y0 + 1) * scale) - 2)
+                px1 = min(img_rgba.width, int((tb.x1 - bbox.x0 + 1) * scale) + 2)
+                py1 = min(img_rgba.height, int((tb.y1 - bbox.y0 + 1) * scale) + 2)
+                for y in range(py0, py1):
+                    for x in range(px0, px1):
+                        pixels[x, y] = (bg_r, bg_g, bg_b, 255)
         
         # Make background transparent
         for y in range(img_rgba.height):
@@ -220,11 +233,25 @@ def _clip_from_pdf(
 
 
 def _add_curved_vector_as_png(slide, ve: VectorElement, page_height: float,
-                               pdf_path: str = "", page_num: int = 0):
-    """Clip curved vector from original PDF as high-fidelity transparent PNG."""
+                               pdf_path: str = "", page_num: int = 0,
+                               text_elements: list = None):
+    """Clip curved vector from original PDF as high-fidelity transparent PNG.
+    
+    Text spans that overlap the vector area are masked out from the PNG,
+    since they'll be added as separate editable text boxes.
+    """
     png = None
     if pdf_path:
-        png = _clip_from_pdf(pdf_path, page_num, ve.bbox)
+        # Find text bboxes that overlap this vector
+        text_bboxes = []
+        if text_elements:
+            for te in text_elements:
+                if (te.bbox.x0 < ve.bbox.x1 and te.bbox.x1 > ve.bbox.x0 and
+                    te.bbox.y0 < ve.bbox.y1 and te.bbox.y1 > ve.bbox.y0):
+                    text_bboxes.append(te.bbox)
+        
+        png = _clip_from_pdf(pdf_path, page_num, ve.bbox,
+                            text_bboxes=text_bboxes)
     
     if png:
         left = _pt_to_emu(ve.bbox.x0)
@@ -233,7 +260,6 @@ def _add_curved_vector_as_png(slide, ve: VectorElement, page_height: float,
         height = _pt_to_emu(ve.bbox.height) or _pt_to_emu(10)
         slide.shapes.add_picture(BytesIO(png), left, top, width, height)
     else:
-        # Fallback to freeform approximation
         _add_freeform_shape(slide, ve, page_height)
 
 
@@ -313,6 +339,7 @@ def build_pptx(
                     _add_curved_vector_as_png(
                         slide, ve, page.height,
                         pdf_path=pdf_path, page_num=page.page_num,
+                        text_elements=page.texts,
                     )
                 else:
                     _add_freeform_shape(slide, ve, page.height)
