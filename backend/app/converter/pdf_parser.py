@@ -9,13 +9,31 @@ from ..config import DEFAULT_ICON_THRESHOLD, ICON_NODE_LIMIT
 
 
 def _color_to_rgb(color) -> tuple:
-    """Convert pymupdf color (0-1 float) to RGB (0-255 int)."""
+    """Convert pymupdf drawing color (0-1 float tuple) to RGB (0-255 int).
+    
+    Used for vector path fill/stroke colors which are float tuples.
+    """
     if not color:
         return (0, 0, 0)
     if isinstance(color, (int, float)):
         v = int(color * 255)
         return (v, v, v)
     return tuple(int(c * 255) for c in color[:3])
+
+
+def _text_color_to_rgb(color_int) -> tuple:
+    """Convert pymupdf text span color (packed int) to RGB (0-255).
+    
+    Text colors are stored as integers: 0xRRGGBB.
+    E.g. 5884904 = 0x59CBE8 → (89, 203, 232) = light blue.
+    """
+    if not isinstance(color_int, (int, float)):
+        return (0, 0, 0)
+    ci = int(color_int)
+    r = (ci >> 16) & 0xFF
+    g = (ci >> 8) & 0xFF
+    b = ci & 0xFF
+    return (r, g, b)
 
 
 def parse_pdf(
@@ -60,7 +78,7 @@ def parse_pdf(
                         font_name=span.get("font", ""),
                         bold=bool(flags & 2**4),
                         italic=bool(flags & 2**1),
-                        color=_color_to_rgb(span.get("color", 0)),
+                    color=_text_color_to_rgb(span.get("color", 0)),
                     ))
 
         # --- Image extraction ---
