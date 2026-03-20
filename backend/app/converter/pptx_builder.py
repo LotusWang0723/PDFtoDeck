@@ -24,10 +24,12 @@ def _rgb(color_tuple: tuple) -> RGBColor:
 
 
 def _add_text_element(slide, te, page_height: float):
-    """Add a text box to the slide."""
+    """Add a text box to the slide.
+
+    pymupdf uses top-left origin (same as PPT), so NO Y-axis flip needed.
+    """
     left = _pt_to_emu(te.bbox.x0)
-    # PDF origin is bottom-left, PPT is top-left
-    top = _pt_to_emu(page_height - te.bbox.y1)
+    top = _pt_to_emu(te.bbox.y0)
     width = _pt_to_emu(te.bbox.width)
     height = _pt_to_emu(te.bbox.height)
 
@@ -38,6 +40,10 @@ def _add_text_element(slide, te, page_height: float):
     txbox = slide.shapes.add_textbox(left, top, width, height)
     tf = txbox.text_frame
     tf.word_wrap = False
+    tf.margin_top = 0
+    tf.margin_bottom = 0
+    tf.margin_left = 0
+    tf.margin_right = 0
     p = tf.paragraphs[0]
     p.text = te.text
     p.font.size = Pt(te.font_size)
@@ -49,9 +55,12 @@ def _add_text_element(slide, te, page_height: float):
 
 
 def _add_image_element(slide, ie, page_height: float):
-    """Add an image to the slide."""
+    """Add an image to the slide.
+
+    pymupdf uses top-left origin, so NO Y-axis flip.
+    """
     left = _pt_to_emu(ie.bbox.x0)
-    top = _pt_to_emu(page_height - ie.bbox.y1)
+    top = _pt_to_emu(ie.bbox.y0)
     width = _pt_to_emu(ie.bbox.width)
     height = _pt_to_emu(ie.bbox.height)
 
@@ -63,12 +72,13 @@ def _add_freeform_shape(slide, ve: VectorElement, page_height: float):
     """Add an editable freeform shape (Plan A) to the slide.
 
     Uses python-pptx 1.x API: build_freeform → move_to / add_line_segments.
+    pymupdf uses top-left origin — NO Y-axis flip.
     """
     if not ve.nodes:
         return
 
     left = _pt_to_emu(ve.bbox.x0)
-    top = _pt_to_emu(page_height - ve.bbox.y1)
+    top = _pt_to_emu(ve.bbox.y0)
     width = _pt_to_emu(ve.bbox.width) or _pt_to_emu(1)
     height = _pt_to_emu(ve.bbox.height) or _pt_to_emu(1)
 
@@ -76,13 +86,11 @@ def _add_freeform_shape(slide, ve: VectorElement, page_height: float):
     bh = ve.bbox.height or 1
 
     def _normalize(node):
-        """Normalize node coords to 0-1 range within bbox, flipping Y."""
+        """Normalize node coords to 0-1 range within bbox."""
         nx = (node.x - ve.bbox.x0) / bw
-        ny = 1.0 - (node.y - ve.bbox.y0) / bh
+        ny = (node.y - ve.bbox.y0) / bh
         return (nx, ny)
 
-    # Split nodes into sub-paths at each "move" node
-    # Each sub-path: start with move_to, then add_line_segments for the rest
     first = ve.nodes[0]
     sx, sy = _normalize(first)
 
@@ -94,16 +102,13 @@ def _add_freeform_shape(slide, ve: VectorElement, page_height: float):
         nx, ny = _normalize(node)
 
         if node.kind == "move":
-            # Flush current segment
             if segment:
                 builder.add_line_segments(segment, close=False)
                 segment = []
             builder.move_to(nx, ny)
         else:
-            # line, close, curve (simplified as line)
             segment.append((nx, ny))
 
-    # Flush remaining segment (close=True to close the shape)
     if segment:
         builder.add_line_segments(segment, close=True)
 
@@ -122,11 +127,9 @@ def _add_freeform_shape(slide, ve: VectorElement, page_height: float):
 
 
 def _add_vector_as_image(slide, ve: VectorElement, page_height: float):
-    """Add vector as SVG-rendered image (Plan B fallback)."""
-    # For MVP, render complex vectors as a placeholder rectangle
-    # Full SVG rendering will be added in Phase 2
+    """Add vector as a rectangle shape (Plan B fallback)."""
     left = _pt_to_emu(ve.bbox.x0)
-    top = _pt_to_emu(page_height - ve.bbox.y1)
+    top = _pt_to_emu(ve.bbox.y0)
     width = _pt_to_emu(ve.bbox.width) or _pt_to_emu(10)
     height = _pt_to_emu(ve.bbox.height) or _pt_to_emu(10)
 
@@ -141,17 +144,53 @@ def _add_vector_as_image(slide, ve: VectorElement, page_height: float):
         shape.line.color.rgb = _rgb(ve.stroke_color)
 
 
-def build_pptx(pages: list[PageElements], output_path: str) -> str:
+def _add_branding_footer(slide, page_width: float, page_height: float):
+    """Add a subtle PDFtoDeck branding footer to the slide."""
+    text = "Converted by PDFtoDeck"
+    font_size = 6
+    box_width = 120
+    box_height = 12
+
+    left = _pt_to_emu(page_width - box_width - 8)
+    top = _pt_to_emu(page_height - box_height - 4)
+    width = _pt_to_emu(box_width)
+    height = _pt_to_emu(box_height)
+
+    txbox = slide.shapes.add_textbox(left, top, width, height)
+    tf = txbox.text_frame
+    tf.word_wrap = False
+    tf.margin_top = 0
+    tf.margin_bottom = 0
+    tf.margin_left = 0
+    tf.margin_right = 0
+    p = tf.paragraphs[0]
+    p.text = text
+    p.alignment = PP_ALIGN.RIGHT
+    p.font.size = Pt(font_size)
+    p.font.color.rgb = RGBColor(160, 160, 180)
+    p.font.italic = True
+
+
+def build_pptx(
+    pages: list[PageElements],
+    output_path: str,
+    source_filename: str = "",
+) -> str:
     """Build a .pptx file from parsed PDF pages.
 
     Args:
         pages: List of PageElements from pdf_parser.
         output_path: Where to save the .pptx file.
+        source_filename: Original PDF filename (for PPTX metadata).
 
     Returns:
         The output file path.
     """
     prs = Presentation()
+
+    # Set document metadata
+    prs.core_properties.title = source_filename.replace(".pdf", "") if source_filename else "PDFtoDeck"
+    prs.core_properties.comments = "Converted by PDFtoDeck — https://pdftodeck.com"
 
     for page in pages:
         # Set slide dimensions to match PDF page
@@ -177,6 +216,9 @@ def build_pptx(pages: list[PageElements], output_path: str) -> str:
                 _add_vector_as_image(slide, ve, page.height)
             elif ve.element_type == ElementType.VECTOR_LARGE:
                 _add_vector_as_image(slide, ve, page.height)
+
+        # Add PDFtoDeck branding
+        _add_branding_footer(slide, page.width, page.height)
 
     prs.save(output_path)
     return output_path

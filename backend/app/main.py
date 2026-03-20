@@ -74,6 +74,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         "pages": page_count,
         "size_mb": round(size_mb, 2),
         "pdf_path": str(pdf_path),
+        "original_filename": file.filename or "",
     }
 
     return {"task_id": task_id, "pages": page_count, "size_mb": round(size_mb, 2)}
@@ -114,6 +115,7 @@ async def _do_convert(task_id: str, icon_threshold: float):
 
             await loop.run_in_executor(
                 None, build_pptx, pages, output_path,
+                task.get("original_filename", ""),
             )
 
             task["status"] = "done"
@@ -152,8 +154,15 @@ async def download(task_id: str):
     if not output_path or not Path(output_path).exists():
         raise HTTPException(404, "Output file not found")
 
+    # Build download filename from original PDF name
+    original = task.get("original_filename", "")
+    if original.lower().endswith(".pdf"):
+        download_name = original[:-4] + ".pptx"
+    else:
+        download_name = f"PDFtoDeck-{task_id}.pptx"
+
     return FileResponse(
         output_path,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=f"PDFtoDeck-{task_id}.pptx",
+        filename=download_name,
     )
