@@ -5,3 +5,4 @@ uvicorn==0.32.0
 python-multipart==0.0.18
 aiofiles==24.1.0
 Pillow
+numpy

@@ -2,6 +2,7 @@
 
 import fitz  # for rendering curved vectors as PNG
 from PIL import Image
+import numpy as np
 import io
 from pptx import Presentation
 from pptx.util import Pt, Emu
@@ -175,19 +176,19 @@ def _render_curved_vector_as_png(ve: VectorElement, scale: float = 3.0) -> bytes
 def _clip_from_pdf(
     pdf_path: str, page_num: int, bbox,
     text_bboxes: list = None,
-    scale: float = 4.0, tolerance: int = 30,
+    scale: float = 4.0,
 ) -> bytes | None:
     """Clip a region from the original PDF page and remove background color.
+    
+    Uses border pixel statistics for adaptive background detection,
+    then Euclidean color distance for precise removal.
     
     Args:
         pdf_path: Path to the PDF file.
         page_num: Page index.
         bbox: BBox object with x0, y0, x1, y1.
-        text_bboxes: List of BBox for text spans inside this area.
-                     These regions will be masked out (painted over with bg color)
-                     so only the graphic remains in the PNG.
+        text_bboxes: List of BBox for text spans to mask out.
         scale: Render scale (higher = sharper).
-        tolerance: Color distance tolerance for background removal.
     
     Returns:
         PNG bytes with transparent background, or None on failure.
@@ -196,52 +197,66 @@ def _clip_from_pdf(
         doc = fitz.open(pdf_path)
         page = doc[page_num]
         
-        # Add 1pt padding
         clip = fitz.Rect(bbox.x0 - 1, bbox.y0 - 1, bbox.x1 + 1, bbox.y1 + 1)
         mat = fitz.Matrix(scale, scale)
-        
         pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
         doc.close()
         
-        # Convert to PIL Image
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        img_rgba = img.convert("RGBA")
-        pixels = img_rgba.load()
+        arr = np.array(img).astype(float)
+        h, w = arr.shape[:2]
         
-        # Auto-detect background color from corners
-        corners = [
-            pixels[0, 0][:3],
-            pixels[pix.width - 1, 0][:3],
-            pixels[0, pix.height - 1][:3],
-            pixels[pix.width - 1, pix.height - 1][:3],
-        ]
-        bg = max(set(corners), key=corners.count)
-        bg_r, bg_g, bg_b = bg[0], bg[1], bg[2]
-        
-        # Mask out text regions: paint them with background color
-        # so they become transparent after bg removal.
-        # Text is handled separately as editable text boxes.
+        # Mask out text regions before background detection
         if text_bboxes:
             for tb in text_bboxes:
                 px0 = max(0, int((tb.x0 - bbox.x0 + 1) * scale) - 2)
                 py0 = max(0, int((tb.y0 - bbox.y0 + 1) * scale) - 2)
-                px1 = min(img_rgba.width, int((tb.x1 - bbox.x0 + 1) * scale) + 2)
-                py1 = min(img_rgba.height, int((tb.y1 - bbox.y0 + 1) * scale) + 2)
-                for y in range(py0, py1):
-                    for x in range(px0, px1):
-                        pixels[x, y] = (bg_r, bg_g, bg_b, 255)
+                px1 = min(w, int((tb.x1 - bbox.x0 + 1) * scale) + 2)
+                py1 = min(h, int((tb.y1 - bbox.y0 + 1) * scale) + 2)
+                # Fill text areas with border color (will be computed below)
+                # For now mark with NaN, handle after bg detection
+        
+        # Sample border pixels (outermost 3 rows/cols) for background color
+        border_width = min(3, h // 4, w // 4)
+        top_border = arr[:border_width, :].reshape(-1, 3)
+        bottom_border = arr[-border_width:, :].reshape(-1, 3)
+        left_border = arr[:, :border_width].reshape(-1, 3)
+        right_border = arr[:, -border_width:].reshape(-1, 3)
+        
+        # Use the border side with lowest variance (most uniform = most likely pure bg)
+        borders = [top_border, bottom_border, left_border, right_border]
+        best_border = min(borders, key=lambda b: np.std(b))
+        
+        bg_mean = best_border.mean(axis=0)
+        bg_std = best_border.std(axis=0)
+        
+        # Conservative adaptive tolerance: cap at 60 to avoid eating foreground
+        tolerance = min(60, max(35, int(np.max(bg_std) * 3.5)))
+        
+        # Convert to RGBA
+        img_rgba = img.convert("RGBA")
+        arr_rgba = np.array(img_rgba)
+        
+        # Paint over text regions with background color
+        if text_bboxes:
+            bg_rgb = bg_mean.astype(np.uint8)
+            for tb in text_bboxes:
+                px0 = max(0, int((tb.x0 - bbox.x0 + 1) * scale) - 4)
+                py0 = max(0, int((tb.y0 - bbox.y0 + 1) * scale) - 4)
+                px1 = min(w, int((tb.x1 - bbox.x0 + 1) * scale) + 4)
+                py1 = min(h, int((tb.y1 - bbox.y0 + 1) * scale) + 4)
+                arr_rgba[py0:py1, px0:px1, :3] = bg_rgb
+                arr[py0:py1, px0:px1, :] = bg_mean  # Update float array too
+        
+        # Euclidean color distance from background mean
+        diff = np.sqrt(np.sum((arr - bg_mean.reshape(1, 1, 3)) ** 2, axis=2))
         
         # Make background transparent
-        for y in range(img_rgba.height):
-            for x in range(img_rgba.width):
-                r, g, b, a = pixels[x, y]
-                if (abs(r - bg_r) < tolerance and 
-                    abs(g - bg_g) < tolerance and 
-                    abs(b - bg_b) < tolerance):
-                    pixels[x, y] = (r, g, b, 0)
+        arr_rgba[diff < tolerance, 3] = 0
         
+        result = Image.fromarray(arr_rgba)
         buf = io.BytesIO()
-        img_rgba.save(buf, format="PNG")
+        result.save(buf, format="PNG")
         return buf.getvalue()
     except Exception:
         return None
