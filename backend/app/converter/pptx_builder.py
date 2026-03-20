@@ -57,16 +57,31 @@ def _add_text_element(slide, te, page_height: float):
         p.font.name = te.font_name
 
 
-def _add_image_element(slide, ie, page_height: float):
+def _add_image_element(slide, ie, page_height: float,
+                       pdf_path: str = "", page_num: int = 0,
+                       page_width: float = 0, page_height_val: float = 0):
     """Add an image to the slide.
-
-    pymupdf uses top-left origin, so NO Y-axis flip.
+    
+    For small icon-sized images, clips from original PDF with background
+    removal for cleaner rendering.
     """
     left = _pt_to_emu(ie.bbox.x0)
     top = _pt_to_emu(ie.bbox.y0)
     width = _pt_to_emu(ie.bbox.width)
     height = _pt_to_emu(ie.bbox.height)
 
+    # Check if this is a small icon that would benefit from clip+bg-removal
+    page_area = page_width * page_height_val if page_width and page_height_val else 0
+    img_area = ie.bbox.width * ie.bbox.height
+    is_small_icon = page_area > 0 and (img_area / page_area) < 0.05
+
+    if is_small_icon and pdf_path:
+        png = _clip_from_pdf(pdf_path, page_num, ie.bbox)
+        if png:
+            slide.shapes.add_picture(BytesIO(png), left, top, width, height)
+            return
+
+    # Default: use original image bytes
     stream = BytesIO(ie.image_bytes)
     slide.shapes.add_picture(stream, left, top, width, height)
 
@@ -346,7 +361,9 @@ def build_pptx(
 
         # 4. Images (on top of vector backgrounds)
         for ie in page.images:
-            _add_image_element(slide, ie, page.height)
+            _add_image_element(slide, ie, page.height,
+                              pdf_path=pdf_path, page_num=page.page_num,
+                              page_width=page.width, page_height_val=page.height)
 
         # 5. Text elements (topmost, always readable)
         for te in page.texts:
