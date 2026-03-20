@@ -293,39 +293,6 @@ def _add_curved_vector_as_png(slide, ve: VectorElement, page_height: float,
         _add_freeform_shape(slide, ve, page_height)
 
 
-def _add_page_background(slide, pdf_path: str, page_num: int,
-                          page_width: float, page_height: float,
-                          scale: float = 2.0):
-    """Render the full PDF page as a background image.
-    
-    This captures everything the PDF renders: gradients, shadings,
-    patterns, transparency effects — things that individual element
-    extraction misses.
-    
-    Text is still added as editable text boxes on top.
-    """
-    try:
-        doc = fitz.open(pdf_path)
-        page = doc[page_num]
-        mat = fitz.Matrix(scale, scale)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        doc.close()
-        
-        # Convert to JPEG for smaller file size
-        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
-        buf.seek(0)
-        
-        slide.shapes.add_picture(
-            buf, 0, 0,
-            _pt_to_emu(page_width),
-            _pt_to_emu(page_height),
-        )
-    except Exception:
-        pass
-
-
 def _add_branding_footer(slide, page_width: float, page_height: float):
     """Add a subtle PDFtoDeck branding footer to the slide."""
     text = "Converted by PDFtoDeck"
@@ -384,18 +351,30 @@ def build_pptx(
         slide_layout = prs.slide_layouts[6]  # Blank layout
         slide = prs.slides.add_slide(slide_layout)
 
-        # === Z-ORDER: page bg → icons → text (editable) ===
+        # === Z-ORDER MATTERS ===
+        # 1. Large vectors first (backgrounds, decorative shapes)
+        for ve in page.vectors:
+            if ve.element_type == ElementType.VECTOR_LARGE:
+                _add_vector_as_image(slide, ve, page.height)
 
-        # 0. Full page background (captures gradients, shadings, all visual elements)
-        if pdf_path:
-            _add_page_background(slide, pdf_path, page.page_num,
-                                page.width, page.height)
+        # 2. Icon-image fallbacks (medium complexity vectors)
+        for ve in page.vectors:
+            if ve.element_type == ElementType.ICON_IMAGE:
+                _add_vector_as_image(slide, ve, page.height)
 
-        # Vector shapes are already visible in the page background,
-        # so we skip re-adding large vectors and icon fallbacks.
-        # Only add clip-rendered curved icons for better z-layering.
+        # 3. Editable freeform icon shapes (or PNG for curved ones)
+        for ve in page.vectors:
+            if ve.element_type == ElementType.ICON_SHAPE:
+                if ve.has_curves:
+                    _add_curved_vector_as_png(
+                        slide, ve, page.height,
+                        pdf_path=pdf_path, page_num=page.page_num,
+                        text_elements=page.texts,
+                    )
+                else:
+                    _add_freeform_shape(slide, ve, page.height)
 
-        # 1. Images (on top of background)
+        # 4. Images (on top of vector backgrounds)
         for ie in page.images:
             _add_image_element(slide, ie, page.height,
                               pdf_path=pdf_path, page_num=page.page_num,
