@@ -118,7 +118,7 @@ def _add_freeform_shape(slide, ve: VectorElement, page_height: float):
 
     if ve.stroke_color:
         shape.line.color.rgb = _rgb(ve.stroke_color)
-        shape.line.width = Pt(ve.stroke_width)
+        shape.line.width = Pt(ve.stroke_width or 1.0)
 
 
 def _add_vector_as_image(slide, ve: VectorElement, page_height: float):
