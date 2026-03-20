@@ -1,6 +1,8 @@
 // API client for PDFtoDeck backend
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// In dev mode, Next.js rewrites /api/* → localhost:8000/api/*
+// In production (Cloudflare), set NEXT_PUBLIC_API_URL to the Workers gateway
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export interface UploadResponse {
   task_id: string;
