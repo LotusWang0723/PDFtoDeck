@@ -60,7 +60,10 @@ def _add_image_element(slide, ie, page_height: float):
 
 
 def _add_freeform_shape(slide, ve: VectorElement, page_height: float):
-    """Add an editable freeform shape (Plan A) to the slide."""
+    """Add an editable freeform shape (Plan A) to the slide.
+
+    Uses python-pptx 1.x API: build_freeform → move_to / add_line_segments.
+    """
     if not ve.nodes:
         return
 
@@ -69,28 +72,42 @@ def _add_freeform_shape(slide, ve: VectorElement, page_height: float):
     width = _pt_to_emu(ve.bbox.width) or _pt_to_emu(1)
     height = _pt_to_emu(ve.bbox.height) or _pt_to_emu(1)
 
-    builder = slide.shapes.build_freeform(
-        left, top, scale_x=width, scale_y=height,
-    )
-
-    # Normalize node coordinates to 0-1 range within bbox
     bw = ve.bbox.width or 1
     bh = ve.bbox.height or 1
 
-    for node in ve.nodes:
+    def _normalize(node):
+        """Normalize node coords to 0-1 range within bbox, flipping Y."""
         nx = (node.x - ve.bbox.x0) / bw
-        # Flip Y axis (PDF bottom-left → PPT top-left)
         ny = 1.0 - (node.y - ve.bbox.y0) / bh
+        return (nx, ny)
+
+    # Split nodes into sub-paths at each "move" node
+    # Each sub-path: start with move_to, then add_line_segments for the rest
+    first = ve.nodes[0]
+    sx, sy = _normalize(first)
+
+    builder = slide.shapes.build_freeform(sx, sy, scale=(width, height))
+
+    segment: list[tuple[float, float]] = []
+
+    for node in ve.nodes[1:]:
+        nx, ny = _normalize(node)
 
         if node.kind == "move":
+            # Flush current segment
+            if segment:
+                builder.add_line_segments(segment, close=False)
+                segment = []
             builder.move_to(nx, ny)
-        elif node.kind in ("line", "close"):
-            builder.line_to(nx, ny)
-        elif node.kind == "curve":
-            # Simplified: treat as line (full bezier needs control points)
-            builder.line_to(nx, ny)
+        else:
+            # line, close, curve (simplified as line)
+            segment.append((nx, ny))
 
-    shape = builder.convert_to_shape()
+    # Flush remaining segment (close=True to close the shape)
+    if segment:
+        builder.add_line_segments(segment, close=True)
+
+    shape = builder.convert_to_shape(left, top)
 
     # Apply colors
     if ve.fill_color and ve.fill_color != (0, 0, 0):
