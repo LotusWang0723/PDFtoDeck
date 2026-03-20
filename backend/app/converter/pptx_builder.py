@@ -200,24 +200,31 @@ def build_pptx(
         slide_layout = prs.slide_layouts[6]  # Blank layout
         slide = prs.slides.add_slide(slide_layout)
 
-        # Add text elements
-        for te in page.texts:
-            _add_text_element(slide, te, page.height)
+        # === Z-ORDER MATTERS ===
+        # 1. Large vectors first (backgrounds, decorative shapes)
+        for ve in page.vectors:
+            if ve.element_type == ElementType.VECTOR_LARGE:
+                _add_vector_as_image(slide, ve, page.height)
 
-        # Add images
-        for ie in page.images:
-            _add_image_element(slide, ie, page.height)
+        # 2. Icon-image fallbacks (medium complexity vectors)
+        for ve in page.vectors:
+            if ve.element_type == ElementType.ICON_IMAGE:
+                _add_vector_as_image(slide, ve, page.height)
 
-        # Add vector elements
+        # 3. Editable freeform icon shapes
         for ve in page.vectors:
             if ve.element_type == ElementType.ICON_SHAPE:
                 _add_freeform_shape(slide, ve, page.height)
-            elif ve.element_type == ElementType.ICON_IMAGE:
-                _add_vector_as_image(slide, ve, page.height)
-            elif ve.element_type == ElementType.VECTOR_LARGE:
-                _add_vector_as_image(slide, ve, page.height)
 
-        # Add PDFtoDeck branding
+        # 4. Images (on top of vector backgrounds)
+        for ie in page.images:
+            _add_image_element(slide, ie, page.height)
+
+        # 5. Text elements (topmost, always readable)
+        for te in page.texts:
+            _add_text_element(slide, te, page.height)
+
+        # 6. PDFtoDeck branding (very top)
         _add_branding_footer(slide, page.width, page.height)
 
     prs.save(output_path)
