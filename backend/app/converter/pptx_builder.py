@@ -163,26 +163,30 @@ def _render_curved_vector_as_png(ve: VectorElement, scale: float = 3.0) -> bytes
         
         ox, oy = ve.bbox.x0, ve.bbox.y0
         
+        # Track current point for proper bezier chaining
+        current = None
+        
         for item in ve.raw_items:
             op = item[0]
             if op == "m":
-                # Move: draw zero-length line to set position
-                pt = fitz.Point(item[1].x - ox, item[1].y - oy)
-                shape.draw_line(pt, pt)
+                current = fitz.Point(item[1].x - ox, item[1].y - oy)
             elif op == "l":
                 pt = fitz.Point(item[1].x - ox, item[1].y - oy)
-                if shape.last_point:
-                    shape.draw_line(shape.last_point, pt)
+                if current is not None:
+                    shape.draw_line(current, pt)
+                current = pt
             elif op == "c":
                 c1 = fitz.Point(item[1].x - ox, item[1].y - oy)
                 c2 = fitz.Point(item[2].x - ox, item[2].y - oy)
                 end = fitz.Point(item[3].x - ox, item[3].y - oy)
-                if shape.last_point:
-                    shape.draw_bezier(shape.last_point, c1, c2, end)
+                if current is not None:
+                    shape.draw_bezier(current, c1, c2, end)
+                current = end
             elif op == "re":
                 r = item[1]
                 rect = fitz.Rect(r.x0 - ox, r.y0 - oy, r.x1 - ox, r.y1 - oy)
                 shape.draw_rect(rect)
+                current = fitz.Point(r.x0 - ox, r.y0 - oy)
         
         fill_rgb = None
         stroke_rgb = None
@@ -194,6 +198,7 @@ def _render_curved_vector_as_png(ve: VectorElement, scale: float = 3.0) -> bytes
         shape.finish(
             fill=fill_rgb, color=stroke_rgb,
             width=ve.stroke_width or 0.5,
+            closePath=True,
         )
         shape.commit()
         
