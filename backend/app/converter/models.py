@@ -15,7 +15,7 @@ class ElementType(Enum):
 
 @dataclass
 class BBox:
-    """Bounding box (origin top-left, as used by pymupdf)."""
+    """Bounding box in PDF coordinates (points, origin bottom-left)."""
     x0: float
     y0: float
     x1: float
@@ -46,19 +46,6 @@ class TextElement:
 
 
 @dataclass
-class TextBlock:
-    """A merged text block containing multiple lines/spans."""
-    text: str              # Full text with \n for line breaks
-    bbox: BBox
-    font_size: float
-    font_name: str = ""
-    bold: bool = False
-    italic: bool = False
-    color: tuple = (0, 0, 0)
-    line_spans: list = field(default_factory=list)  # [[span_dicts], ...]
-
-
-@dataclass
 class ImageElement:
     image_bytes: bytes
     bbox: BBox
@@ -70,18 +57,17 @@ class PathNode:
     """A single point in a vector path."""
     x: float
     y: float
-    kind: str = "line"  # line, curve, curve_c1, curve_c2, move, close
+    kind: str = "line"  # line, curve, move, close
 
 
 @dataclass
 class VectorElement:
     nodes: list[PathNode] = field(default_factory=list)
     bbox: BBox = None
-    fill_color: Optional[tuple] = None   # RGB 0-255, None = no fill
-    stroke_color: Optional[tuple] = None # RGB 0-255, None = no stroke
+    fill_color: Optional[tuple] = None   # RGB 0-255
+    stroke_color: Optional[tuple] = None
     stroke_width: float = 1.0
     element_type: ElementType = ElementType.ICON_SHAPE
-    has_curves: bool = False
 
     @property
     def node_count(self) -> int:
@@ -95,6 +81,5 @@ class PageElements:
     width: float   # page width in points
     height: float  # page height in points
     texts: list[TextElement] = field(default_factory=list)
-    text_blocks: list[TextBlock] = field(default_factory=list)
     images: list[ImageElement] = field(default_factory=list)
     vectors: list[VectorElement] = field(default_factory=list)
