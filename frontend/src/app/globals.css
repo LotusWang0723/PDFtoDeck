@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #111827;
+  --bg-card: #1f2937;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --text-primary: #f9fafb;
+  --text-secondary: #9ca3af;
+  --border: #374151;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Drag-and-drop zone animations */
+.upload-zone {
+  transition: all 0.3s ease;
+}
+.upload-zone.dragging {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.08);
+  transform: scale(1.01);
+}
+
+/* Progress bar animation */
+.progress-bar {
+  transition: width 0.5s ease;
+}
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 0.5s ease forwards;
+}
+
+/* Pulse glow for processing state */
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.2); }
+  50% { box-shadow: 0 0 40px rgba(99, 102, 241, 0.4); }
+}
+.pulse-glow {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
