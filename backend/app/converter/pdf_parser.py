@@ -102,6 +102,7 @@ def parse_pdf(
         drawings = page.get_drawings()
         for d in drawings:
             nodes = []
+            has_curves = False
             for item in d.get("items", []):
                 op = item[0]  # operation: "l", "c", "m", "re", etc.
                 if op == "m":  # moveto
@@ -109,6 +110,7 @@ def parse_pdf(
                 elif op == "l":  # lineto
                     nodes.append(PathNode(item[1].x, item[1].y, "line"))
                 elif op == "c":  # curveto (bezier)
+                    has_curves = True
                     nodes.append(PathNode(item[3].x, item[3].y, "curve"))
                 elif op == "re":  # rectangle
                     r = item[1]  # fitz.Rect
@@ -127,6 +129,8 @@ def parse_pdf(
 
             fill = _color_to_rgb(d.get("fill"))
             stroke = _color_to_rgb(d.get("color"))
+            has_fill = d.get("fill") is not None
+            has_stroke = d.get("color") is not None
             width = d.get("width", 1.0)
 
             # Classify vector element
@@ -139,8 +143,11 @@ def parse_pdf(
 
             elements.vectors.append(VectorElement(
                 nodes=nodes, bbox=bbox,
-                fill_color=fill, stroke_color=stroke,
+                fill_color=fill if has_fill else None,
+                stroke_color=stroke if has_stroke else None,
                 stroke_width=width, element_type=etype,
+                has_curves=has_curves,
+                raw_items=d.get("items", []),
             ))
 
         pages.append(elements)

@@ -68,6 +68,8 @@ class VectorElement:
     stroke_color: Optional[tuple] = None
     stroke_width: float = 1.0
     element_type: ElementType = ElementType.ICON_SHAPE
+    has_curves: bool = False  # True if path contains bezier curves
+    raw_items: list = field(default_factory=list)  # Original pymupdf drawing items
 
     @property
     def node_count(self) -> int:

@@ -1,5 +1,6 @@
 """PPT builder: generate .pptx from extracted PDF elements."""
 
+import fitz  # for rendering curved vectors as PNG
 from pptx import Presentation
 from pptx.util import Pt, Emu
 from pptx.dml.color import RGBColor
@@ -144,6 +145,82 @@ def _add_vector_as_image(slide, ve: VectorElement, page_height: float):
         shape.line.color.rgb = _rgb(ve.stroke_color)
 
 
+def _render_curved_vector_as_png(ve: VectorElement, scale: float = 3.0) -> bytes | None:
+    """Render a curved vector element as a transparent PNG using pymupdf.
+    
+    Creates a temp page, replays the path with bezier curves, rasterizes to PNG.
+    Returns PNG bytes or None on failure.
+    """
+    try:
+        w = ve.bbox.width
+        h = ve.bbox.height
+        if w < 1 or h < 1:
+            return None
+        
+        tmp_doc = fitz.open()
+        page = tmp_doc.new_page(width=w, height=h)
+        shape = page.new_shape()
+        
+        ox, oy = ve.bbox.x0, ve.bbox.y0
+        
+        for item in ve.raw_items:
+            op = item[0]
+            if op == "m":
+                # Move: draw zero-length line to set position
+                pt = fitz.Point(item[1].x - ox, item[1].y - oy)
+                shape.draw_line(pt, pt)
+            elif op == "l":
+                pt = fitz.Point(item[1].x - ox, item[1].y - oy)
+                if shape.last_point:
+                    shape.draw_line(shape.last_point, pt)
+            elif op == "c":
+                c1 = fitz.Point(item[1].x - ox, item[1].y - oy)
+                c2 = fitz.Point(item[2].x - ox, item[2].y - oy)
+                end = fitz.Point(item[3].x - ox, item[3].y - oy)
+                if shape.last_point:
+                    shape.draw_bezier(shape.last_point, c1, c2, end)
+            elif op == "re":
+                r = item[1]
+                rect = fitz.Rect(r.x0 - ox, r.y0 - oy, r.x1 - ox, r.y1 - oy)
+                shape.draw_rect(rect)
+        
+        fill_rgb = None
+        stroke_rgb = None
+        if ve.fill_color is not None:
+            fill_rgb = tuple(c / 255.0 for c in ve.fill_color[:3])
+        if ve.stroke_color is not None:
+            stroke_rgb = tuple(c / 255.0 for c in ve.stroke_color[:3])
+        
+        shape.finish(
+            fill=fill_rgb, color=stroke_rgb,
+            width=ve.stroke_width or 0.5,
+        )
+        shape.commit()
+        
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat, alpha=True)
+        png_bytes = pix.tobytes("png")
+        
+        tmp_doc.close()
+        return png_bytes
+    except Exception:
+        return None
+
+
+def _add_curved_vector_as_png(slide, ve: VectorElement, page_height: float):
+    """Render a curved vector as transparent PNG and add as picture."""
+    png = _render_curved_vector_as_png(ve)
+    if png:
+        left = _pt_to_emu(ve.bbox.x0)
+        top = _pt_to_emu(ve.bbox.y0)
+        width = _pt_to_emu(ve.bbox.width) or _pt_to_emu(10)
+        height = _pt_to_emu(ve.bbox.height) or _pt_to_emu(10)
+        slide.shapes.add_picture(BytesIO(png), left, top, width, height)
+    else:
+        # Fallback to freeform approximation
+        _add_freeform_shape(slide, ve, page_height)
+
+
 def _add_branding_footer(slide, page_width: float, page_height: float):
     """Add a subtle PDFtoDeck branding footer to the slide."""
     text = "Converted by PDFtoDeck"
@@ -211,10 +288,15 @@ def build_pptx(
             if ve.element_type == ElementType.ICON_IMAGE:
                 _add_vector_as_image(slide, ve, page.height)
 
-        # 3. Editable freeform icon shapes
+        # 3. Editable freeform icon shapes (or PNG for curved ones)
         for ve in page.vectors:
             if ve.element_type == ElementType.ICON_SHAPE:
-                _add_freeform_shape(slide, ve, page.height)
+                if ve.has_curves:
+                    # Curves can't be represented by freeform line segments
+                    # Render as transparent PNG instead
+                    _add_curved_vector_as_png(slide, ve, page.height)
+                else:
+                    _add_freeform_shape(slide, ve, page.height)
 
         # 4. Images (on top of vector backgrounds)
         for ie in page.images:
