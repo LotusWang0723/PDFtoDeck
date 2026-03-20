@@ -1,6 +1,8 @@
 """PPT builder: generate .pptx from extracted PDF elements."""
 
 import fitz  # for rendering curved vectors as PNG
+from PIL import Image
+import io
 from pptx import Presentation
 from pptx.util import Pt, Emu
 from pptx.dml.color import RGBColor
@@ -146,75 +148,84 @@ def _add_vector_as_image(slide, ve: VectorElement, page_height: float):
 
 
 def _render_curved_vector_as_png(ve: VectorElement, scale: float = 3.0) -> bytes | None:
-    """Render a curved vector element as a transparent PNG using pymupdf.
+    """Render a curved vector by clipping from original PDF page + removing background.
     
-    Creates a temp page, replays the path with bezier curves, rasterizes to PNG.
-    Returns PNG bytes or None on failure.
+    This is a fallback that gets called with the PDF doc and page context.
+    See _clip_from_pdf() for the actual implementation.
+    Returns None — the real work is done via _clip_from_pdf in build_pptx.
+    """
+    return None
+
+
+def _clip_from_pdf(
+    pdf_path: str, page_num: int, bbox, bg_color: tuple | None = None,
+    scale: float = 4.0, tolerance: int = 30,
+) -> bytes | None:
+    """Clip a region from the original PDF page and remove background color.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        page_num: Page index.
+        bbox: BBox object with x0, y0, x1, y1.
+        bg_color: Background RGB (0-255) to make transparent. Auto-detected if None.
+        scale: Render scale (higher = sharper).
+        tolerance: Color distance tolerance for background removal.
+    
+    Returns:
+        PNG bytes with transparent background, or None on failure.
     """
     try:
-        w = ve.bbox.width
-        h = ve.bbox.height
-        if w < 1 or h < 1:
-            return None
+        doc = fitz.open(pdf_path)
+        page = doc[page_num]
         
-        tmp_doc = fitz.open()
-        page = tmp_doc.new_page(width=w, height=h)
-        shape = page.new_shape()
-        
-        ox, oy = ve.bbox.x0, ve.bbox.y0
-        
-        # Track current point for proper bezier chaining
-        current = None
-        
-        for item in ve.raw_items:
-            op = item[0]
-            if op == "m":
-                current = fitz.Point(item[1].x - ox, item[1].y - oy)
-            elif op == "l":
-                pt = fitz.Point(item[1].x - ox, item[1].y - oy)
-                if current is not None:
-                    shape.draw_line(current, pt)
-                current = pt
-            elif op == "c":
-                c1 = fitz.Point(item[1].x - ox, item[1].y - oy)
-                c2 = fitz.Point(item[2].x - ox, item[2].y - oy)
-                end = fitz.Point(item[3].x - ox, item[3].y - oy)
-                if current is not None:
-                    shape.draw_bezier(current, c1, c2, end)
-                current = end
-            elif op == "re":
-                r = item[1]
-                rect = fitz.Rect(r.x0 - ox, r.y0 - oy, r.x1 - ox, r.y1 - oy)
-                shape.draw_rect(rect)
-                current = fitz.Point(r.x0 - ox, r.y0 - oy)
-        
-        fill_rgb = None
-        stroke_rgb = None
-        if ve.fill_color is not None:
-            fill_rgb = tuple(c / 255.0 for c in ve.fill_color[:3])
-        if ve.stroke_color is not None:
-            stroke_rgb = tuple(c / 255.0 for c in ve.stroke_color[:3])
-        
-        shape.finish(
-            fill=fill_rgb, color=stroke_rgb,
-            width=ve.stroke_width or 0.5,
-            closePath=True,
-        )
-        shape.commit()
-        
+        # Add 1pt padding
+        clip = fitz.Rect(bbox.x0 - 1, bbox.y0 - 1, bbox.x1 + 1, bbox.y1 + 1)
         mat = fitz.Matrix(scale, scale)
-        pix = page.get_pixmap(matrix=mat, alpha=True)
-        png_bytes = pix.tobytes("png")
         
-        tmp_doc.close()
-        return png_bytes
+        pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
+        doc.close()
+        
+        # Convert to PIL Image
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        img_rgba = img.convert("RGBA")
+        pixels = img_rgba.load()
+        
+        # Auto-detect background color from corners if not provided
+        if bg_color is None:
+            corners = [
+                pixels[0, 0][:3],
+                pixels[pix.width - 1, 0][:3],
+                pixels[0, pix.height - 1][:3],
+                pixels[pix.width - 1, pix.height - 1][:3],
+            ]
+            # Use most common corner color as background
+            bg_color = max(set(corners), key=corners.count)
+        
+        bg_r, bg_g, bg_b = bg_color[0], bg_color[1], bg_color[2]
+        
+        # Make background transparent
+        for y in range(img_rgba.height):
+            for x in range(img_rgba.width):
+                r, g, b, a = pixels[x, y]
+                if (abs(r - bg_r) < tolerance and 
+                    abs(g - bg_g) < tolerance and 
+                    abs(b - bg_b) < tolerance):
+                    pixels[x, y] = (r, g, b, 0)
+        
+        buf = io.BytesIO()
+        img_rgba.save(buf, format="PNG")
+        return buf.getvalue()
     except Exception:
         return None
 
 
-def _add_curved_vector_as_png(slide, ve: VectorElement, page_height: float):
-    """Render a curved vector as transparent PNG and add as picture."""
-    png = _render_curved_vector_as_png(ve)
+def _add_curved_vector_as_png(slide, ve: VectorElement, page_height: float,
+                               pdf_path: str = "", page_num: int = 0):
+    """Clip curved vector from original PDF as high-fidelity transparent PNG."""
+    png = None
+    if pdf_path:
+        png = _clip_from_pdf(pdf_path, page_num, ve.bbox)
+    
     if png:
         left = _pt_to_emu(ve.bbox.x0)
         top = _pt_to_emu(ve.bbox.y0)
@@ -257,6 +268,7 @@ def build_pptx(
     pages: list[PageElements],
     output_path: str,
     source_filename: str = "",
+    pdf_path: str = "",
 ) -> str:
     """Build a .pptx file from parsed PDF pages.
 
@@ -264,6 +276,7 @@ def build_pptx(
         pages: List of PageElements from pdf_parser.
         output_path: Where to save the .pptx file.
         source_filename: Original PDF filename (for PPTX metadata).
+        pdf_path: Path to original PDF (for high-fidelity clip rendering).
 
     Returns:
         The output file path.
@@ -297,9 +310,10 @@ def build_pptx(
         for ve in page.vectors:
             if ve.element_type == ElementType.ICON_SHAPE:
                 if ve.has_curves:
-                    # Curves can't be represented by freeform line segments
-                    # Render as transparent PNG instead
-                    _add_curved_vector_as_png(slide, ve, page.height)
+                    _add_curved_vector_as_png(
+                        slide, ve, page.height,
+                        pdf_path=pdf_path, page_num=page.page_num,
+                    )
                 else:
                     _add_freeform_shape(slide, ve, page.height)
 

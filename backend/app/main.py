@@ -116,6 +116,7 @@ async def _do_convert(task_id: str, icon_threshold: float):
             await loop.run_in_executor(
                 None, build_pptx, pages, output_path,
                 task.get("original_filename", ""),
+                pdf_path,
             )
 
             task["status"] = "done"
