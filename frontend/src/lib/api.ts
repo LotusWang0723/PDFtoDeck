@@ -21,12 +21,18 @@ export interface StatusResponse {
   error?: string;
 }
 
-export async function uploadPDF(file: File): Promise<UploadResponse> {
+export async function uploadPDF(file: File, email?: string): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
 
+  const headers: Record<string, string> = {};
+  if (email) {
+    headers["X-User-Email"] = email;
+  }
+
   const res = await fetch(`${API_BASE}/api/upload`, {
     method: "POST",
+    headers,
     body: formData,
   });
 

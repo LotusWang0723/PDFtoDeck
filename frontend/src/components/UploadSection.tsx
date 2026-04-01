@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { useSession } from "next-auth/react";
 import {
   uploadPDF,
   startConvert,
@@ -13,6 +14,7 @@ import {
 type Stage = "idle" | "uploading" | "uploaded" | "converting" | "done" | "error";
 
 export function UploadSection() {
+  const { data: session } = useSession();
   const [stage, setStage] = useState<Stage>("idle");
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -21,6 +23,17 @@ export function UploadSection() {
   const [errorMsg, setErrorMsg] = useState("");
   const [iconThreshold, setIconThreshold] = useState(5); // percentage
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [userCredits, setUserCredits] = useState(0);
+
+  // Fetch user credits
+  useEffect(() => {
+    if (session?.user?.email) {
+      fetch(`/api/user/credits?email=${encodeURIComponent(session.user.email)}`)
+        .then(res => res.json())
+        .then(data => setUserCredits(data.credits || 0))
+        .catch(() => {});
+    }
+  }, [session]);
 
   const reset = useCallback(() => {
     setStage("idle");
@@ -37,25 +50,20 @@ export function UploadSection() {
       setStage("error");
       return;
     }
-    if (f.size > 20 * 1024 * 1024) {
-      setErrorMsg("File too large. Maximum 20MB for free tier.");
-      setStage("error");
-      return;
-    }
 
     setFile(f);
     setStage("uploading");
     setErrorMsg("");
 
     try {
-      const res = await uploadPDF(f);
+      const res = await uploadPDF(f, session?.user?.email || undefined);
       setUploadInfo(res);
       setStage("uploaded");
     } catch (e: unknown) {
       setErrorMsg(e instanceof Error ? e.message : "Upload failed");
       setStage("error");
     }
-  }, []);
+  }, [session]);
 
   const handleConvert = useCallback(async () => {
     if (!uploadInfo) return;
@@ -166,7 +174,11 @@ export function UploadSection() {
               Drop your PDF here
             </p>
             <p className="mt-2 text-sm text-gray-500">
-              or click to browse · Max 20MB, 10 pages
+              or click to browse · {!session
+                ? "Max 10MB, 5 pages (guest)"
+                : userCredits > 0
+                  ? "Max 200MB, 200 pages (paid)"
+                  : "Max 50MB, 20 pages (free)"}
             </p>
 
             {/* Error message */}

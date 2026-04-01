@@ -1,3 +1,5 @@
+import { AuthButton } from "./AuthButton";
+
 export function Hero() {
   return (
     <section className="relative overflow-hidden pt-20 pb-8 px-4 sm:px-6 lg:px-8">
@@ -5,6 +7,11 @@ export function Hero() {
       <div className="absolute inset-0 -z-10">
         <div className="absolute inset-0 bg-gradient-to-b from-indigo-950/40 via-transparent to-transparent" />
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-indigo-500/10 rounded-full blur-3xl" />
+      </div>
+
+      {/* Auth button in top right */}
+      <div className="absolute top-6 right-6">
+        <AuthButton />
       </div>
 
       <div className="max-w-4xl mx-auto text-center">

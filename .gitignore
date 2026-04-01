@@ -30,6 +30,7 @@ frontend/out/
 # Uploads & temp files
 backend/uploads/
 backend/output/
+backend/data/
 *.pdf
 *.pptx
 
